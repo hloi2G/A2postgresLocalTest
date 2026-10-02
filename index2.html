@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>i2G Systems | Postgres API test</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <style>
+    :root {
+      --navy: #002343;        /* the night sky behind the logo */
+      --navy-deep: #00172d;
+      --i2g-blue: #2f8fd0;    /* the globe dots */
+      --ink-soft: #b9cde0;
+      --banner-h: clamp(78px, 10vw, 128px);
+      --banner-img: url("images/i2Gimage.png");
+    }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--navy-deep); }
+    #map { flex: 1; min-height: 0; }
+
+    /* ---------- Banner ---------- */
+    .banner {
+      position: relative; z-index: 1000; flex: none;
+      height: var(--banner-h); display: flex; align-items: center; gap: clamp(12px, 2vw, 24px);
+      padding: 0 clamp(12px, 3vw, 36px); overflow: hidden;
+      background: #022240;
+      box-shadow: 0 1px 0 var(--i2g-blue), 0 4px 18px rgba(47,143,208,.35);
+      /* Discourage saving the image */
+      -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    }
+    /* The skyline from the image, fading into the navy on the left */
+    .banner .sky {
+      position: absolute; inset: 0; pointer-events: none;
+      background: var(--banner-img) center 46% / cover no-repeat;
+      -webkit-mask-image: linear-gradient(to right, transparent 28%, rgba(0,0,0,.5) 60%, #000 88%);
+              mask-image: linear-gradient(to right, transparent 28%, rgba(0,0,0,.5) 60%, #000 88%);
+    }
+    /* Just the i2G logo, cropped out of the same image (pixels 382–652 × 34–230 of 1584 × 672) */
+    .banner .logo {
+      position: relative; flex: none; pointer-events: none;
+      height: calc(var(--banner-h) - 14px); aspect-ratio: 270 / 196;
+      background: var(--banner-img) 29.071% 7.143% / 586.67% auto no-repeat;
+      /* Feather the edges so the crop melts into the banner */
+      -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 97%),
+                          linear-gradient(to right, transparent, #000 7%, #000 93%, transparent);
+      -webkit-mask-composite: source-in;
+              mask-image: linear-gradient(to bottom, #000 62%, transparent 97%),
+                          linear-gradient(to right, transparent, #000 7%, #000 93%, transparent);
+              mask-composite: intersect;
+    }
+    .banner .rule { position: relative; flex: none; width: 1px; align-self: stretch; margin: 22% 0;
+                    background: linear-gradient(transparent, var(--i2g-blue), transparent); }
+    .banner .titles { position: relative; min-width: 0; color: #fff; text-shadow: 0 1px 8px rgba(0,15,30,.8); }
+    .banner h1 {
+      margin: 0; font-family: "Saira", system-ui, sans-serif; font-weight: 600;
+      font-size: clamp(18px, 2.6vw, 30px); line-height: 1.1; letter-spacing: .01em;
+    }
+    .banner p {
+      margin: .3em 0 0; max-width: 60ch; color: var(--ink-soft);
+      font-size: clamp(12px, 1.15vw, 15px); line-height: 1.4;
+    }
+    @media (max-width: 560px) { .banner p { display: none; } .banner .rule { display: none; } }
+
+    /* ---------- Map panels ---------- */
+    .panel { background: #fff; padding: 8px 10px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 13px; line-height: 1.5; max-width: 260px; }
+    .panel .err { color: #b00020; }
+    .panel summary { cursor: pointer; font-weight: 600; }
+    .popup-table td { padding: 1px 6px 1px 0; vertical-align: top; }
+    .popup-table td:first-child { color: #666; }
+    .swatch { display: inline-block; flex: none; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px; border: 1px solid #0003; }
+    /* Street light symbol: warm lamp with a soft glow */
+    .lamp { display: inline-block; flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 7px 0 3px;
+            border-radius: 50%; background: #ffc23a; border: 1px solid #5c3a00;
+            box-shadow: 0 0 0 3px rgba(255,183,3,.35); vertical-align: 0; }
+
+    .legend { min-width: 190px; max-height: 50vh; overflow-y: auto; }
+    .legend .group { margin-top: 6px; }
+    .legend .group-title { font-weight: 600; margin-bottom: 2px; }
+    .legend .row { display: flex; align-items: center; }
+    .legend .count { margin-left: auto; padding-left: 12px; color: #888; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+<header class="banner" oncontextmenu="return false" ondragstart="return false">
+  <div class="sky" aria-hidden="true"></div>
+  <div class="logo" role="img" aria-label="i2G Systems"></div>
+  <div class="rule" aria-hidden="true"></div>
+  <div class="titles">
+    <h1>Postgres, straight to the map</h1>
+    <p>An API test of Ann Arbor street lights and land use, served live from PostGIS with no ArcGIS Online in between.</p>
+  </div>
+</header>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  // ---------- Settings you may want to change ----------
+  // Must be HTTPS and reachable from the public internet for GitHub Pages visitors.
+  const SERVER = "https://henrylegion.tail9fa308.ts.net";
+
+  // Leave empty to load every layer the server publishes,
+  // or list ids to load only these, e.g. ["public.aa_landuse", "public.streetlights"]
+  const ONLY = [];
+
+  // Any layer whose id matches this is treated as the street lights layer (drawn on top)
+  const MAIN_LAYER = /light/i;
+
+  // The land use layer and the attribute that holds its type
+  const LANDUSE_ID = "public.aa_landuse";
+  const LANDUSE_FIELD = "GROUP_";
+
+  // Optional friendly names for the layer switcher and key
+  const LABELS = { "public.aa_landuse": "Land use" };
+
+  // Optional: copies of layers saved as GeoJSON files in this repo, used if the
+  // server can't be reached. e.g. { "public.aa_landuse": "data/aa_landuse.geojson" }
+  const FALLBACK = {};
+
+  // Land use colors (key = value in the data) and nicer names for the key
+  const LANDUSE_COLORS = {
+    "Residential": "#f2c94c", "Commercial": "#eb5757", "Office": "#bb6bd9",
+    "Industrial": "#8d6e63", "Recreation": "#27ae60", "Vacant": "#bdbdbd",
+    "Transportation": "#828282", "Water": "#2d9cdb",
+    "Public/Quasi-Public/Institutional/Organi": "#56ccf2"
+  };
+  const LANDUSE_NAMES = { "Public/Quasi-Public/Institutional/Organi": "Public / institutional" };
+  const LANDUSE_OTHER = "#f2994a";
+
+  const PALETTE = ["#1f78b4", "#e31a1c", "#33a02c", "#ff7f00", "#6a3d9a", "#b15928", "#a6cee3", "#fb9a99"];
+  // ------------------------------------------------------
+
+  const isLights = id => MAIN_LAYER.test(id);
+  const isLanduse = id => id === LANDUSE_ID;
+  const nameOf = id => LABELS[id] || (isLights(id) ? "Street lights" : id.replace(/^public\./, ""));
+  // Draw order: land use at the bottom, other layers in the middle, street lights on top
+  const rank = id => isLights(id) ? 0 : isLanduse(id) ? 2 : 1;
+  const wide = window.innerWidth > 700;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // Canvas rendering keeps thousands of points fast
+  const map = L.map("map", { preferCanvas: true }).setView([42.28, -83.74], 12);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 16, attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  const switcher = L.control.layers(null, {}, { collapsed: !wide }).addTo(map);
+
+  // ---------- Status panel: one line per layer ----------
+  const status = L.control({ position: wide ? "bottomleft" : "topleft" });
+  status.onAdd = () => { const d = L.DomUtil.create("div", "panel"); d.textContent = "Finding layers…"; return d; };
+  status.addTo(map);
+  const statusBox = () => status.getContainer();
+  const lines = {};
+  function setLine(id, html) { lines[id] = html; statusBox().innerHTML = Object.values(lines).join("<br>"); }
+
+  // ---------- Key ----------
+  const legendParts = {};
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const d = L.DomUtil.create("div", "panel legend");
+    d.innerHTML = "<details" + (wide ? " open" : "") + '><summary>Key</summary><div class="body"></div></details>';
+    d.style.display = "none";
+    L.DomEvent.disableClickPropagation(d);
+    L.DomEvent.disableScrollPropagation(d);
+    return d;
+  };
+  legend.addTo(map);
+  function renderLegend() {
+    const ids = Object.keys(legendParts).sort((a, b) => rank(a) - rank(b));
+    legend.getContainer().style.display = ids.length ? "" : "none";
+    legend.getContainer().querySelector(".body").innerHTML = ids.map(id => legendParts[id]).join("");
+  }
+  const row = (symbol, label, count) =>
+    '<div class="row">' + symbol + "<span>" + esc(label) + "</span>" +
+    (count != null ? '<span class="count">' + count.toLocaleString() + "</span>" : "") + "</div>";
+  const swatch = color => '<span class="swatch" style="background:' + color + '"></span>';
+  const LAMP = '<span class="lamp"></span>';
+
+  function landuseLegend(features) {
+    const counts = {};
+    for (const f of features) {
+      const g = f.properties[LANDUSE_FIELD] ?? "Unknown";
+      counts[g] = (counts[g] || 0) + 1;
+    }
+    let html = '<div class="group"><div class="group-title">' + esc(nameOf(LANDUSE_ID)) + "</div>";
+    for (const g of Object.keys(LANDUSE_COLORS)) {
+      if (counts[g]) html += row(swatch(LANDUSE_COLORS[g]), LANDUSE_NAMES[g] || g, counts[g]);
+    }
+    const others = Object.keys(counts).filter(g => !(g in LANDUSE_COLORS));
+    if (others.length) html += row(swatch(LANDUSE_OTHER), "Other", others.reduce((s, g) => s + counts[g], 0));
+    return html + "</div>";
+  }
+
+  // ---------- Styles ----------
+  // Street lights: an amber lamp dot. Small and plain when zoomed out,
+  // with an outline and soft glow once you're close enough to see single lights.
+  const lampRadius = z => ({ 11: 1.3, 12: 1.7, 13: 2.3, 14: 3.2, 15: 4.2 })[z] || (z < 11 ? 1 : 5.2);
+  const lampStyle = () => {
+    const z = map.getZoom();
+    return { radius: lampRadius(z), fillColor: z <= 11 ? "#d98200" : "#ffc23a", fillOpacity: 1,
+             color: "#5c3a00", weight: z <= 11 ? 0 : z === 12 ? 0.6 : 1 };
+  };
+  const glowStyle = () => {
+    const z = map.getZoom();
+    return { radius: lampRadius(z) * 2.2, stroke: false, fillColor: "#ffb703",
+             fillOpacity: z >= 14 ? 0.3 : 0, interactive: false };
+  };
+  const landuseStyle = f => ({ color: "#555", weight: 0.4, fillOpacity: 0.55,
+                               fillColor: LANDUSE_COLORS[f.properties[LANDUSE_FIELD]] || LANDUSE_OTHER });
+
+  function popupFor(props) {
+    const rows = Object.entries(props)
+      .map(([k, v]) => "<tr><td>" + esc(k) + "</td><td><b>" + esc(v ?? "—") + "</b></td></tr>").join("");
+    return '<table class="popup-table">' + rows + "</table>";
+  }
+
+  // ---------- Loading ----------
+  // Fetch every page of a collection (follows rel="next" links if the server pages)
+  async function fetchAll(id) {
+    let url = SERVER + "/collections/" + id + "/items.json?limit=10000";
+    const features = [];
+    while (url) {
+      const res = await fetch(url, { headers: { Accept: "application/geo+json" } });
+      if (!res.ok) throw new Error("server returned " + res.status);
+      const data = await res.json();
+      features.push(...data.features);
+      const next = (data.links || []).find(l => l.rel === "next");
+      url = next && data.features.length ? next.href : null;
+    }
+    return features;
+  }
+
+  async function fetchFile(id) {
+    const res = await fetch(FALLBACK[id]);
+    if (!res.ok) throw new Error(FALLBACK[id] + " not found");
+    return (await res.json()).features;
+  }
+
+  const loaded = {};     // id -> layer on the map
+  const lampParts = [];  // [glow, dots] geoJSON layers that resize with zoom
+  function reorder() {
+    Object.keys(loaded).sort((a, b) => rank(b) - rank(a))
+      .forEach(id => { if (map.hasLayer(loaded[id])) loaded[id].bringToFront(); });
+  }
+  map.on("overlayadd", reorder);
+  map.on("zoomend", () => {
+    const lamp = lampStyle(), glow = glowStyle();
+    lampParts.forEach(([g, d]) => {
+      g.eachLayer(l => { l.setRadius(glow.radius); l.setStyle({ fillOpacity: glow.fillOpacity }); });
+      d.eachLayer(l => { if (l.setRadius) { l.setRadius(lamp.radius); l.setStyle({ weight: lamp.weight, fillColor: lamp.fillColor }); } });
+    });
+  });
+
+  function buildLights(fc) {
+    const isPoint = f => f.geometry && /Point/.test(f.geometry.type);
+    const glow = L.geoJSON(fc, { filter: isPoint, pointToLayer: (f, ll) => L.circleMarker(ll, glowStyle()) });
+    const dots = L.geoJSON(fc, {
+      style: () => ({ color: "#5c3a00", weight: 2 }),
+      pointToLayer: (f, ll) => L.circleMarker(ll, lampStyle()),
+      onEachFeature: (f, lyr) => lyr.bindPopup(popupFor(f.properties))
+    });
+    lampParts.push([glow, dots]);
+    return L.featureGroup([glow, dots]);
+  }
+
+  function buildOther(fc, style) {
+    return L.geoJSON(fc, {
+      style,
+      pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, ...style(f), fillOpacity: 0.85 }),
+      onEachFeature: (f, lyr) => lyr.bindPopup(popupFor(f.properties))
+    });
+  }
+
+  async function loadLayer(id, color, getFeatures) {
+    const name = nameOf(id);
+    setLine(id, "Loading " + esc(name) + "…");
+    try {
+      const features = await getFeatures(id);
+      const fc = { type: "FeatureCollection", features };
+      const layer = isLights(id) ? buildLights(fc)
+                  : buildOther(fc, isLanduse(id) ? landuseStyle
+                                   : () => ({ color, weight: 2, fillColor: color, fillOpacity: 0.35 }));
+      layer.addTo(map);
+      loaded[id] = layer;
+      reorder();
+
+      const symbol = isLights(id) ? LAMP : swatch(isLanduse(id) ? LANDUSE_COLORS.Residential : color);
+      switcher.addOverlay(layer, symbol + esc(name));
+      legendParts[id] = isLanduse(id) ? landuseLegend(features)
+                      : '<div class="group">' + row(symbol, name, features.length) + "</div>";
+      renderLegend();
+      setLine(id, symbol + esc(name) + ": " + features.length.toLocaleString() + " features");
+      return layer;
+    } catch (err) {
+      setLine(id, '<span class="err">' + esc(name) + ": " + esc(err.message) + "</span>");
+      return null;
+    }
+  }
+
+  async function loadAll(ids, getFeatures) {
+    const layers = await Promise.all(ids.map((id, i) => loadLayer(id, PALETTE[i % PALETTE.length], getFeatures)));
+    const found = layers.filter(Boolean);
+    if (found.length) map.fitBounds(L.featureGroup(found).getBounds(), { padding: [20, 20] });
+  }
+
+  async function start() {
+    let ids;
+    try {
+      // Ask the server which layers exist
+      const res = await fetch(SERVER + "/collections.json");
+      if (!res.ok) throw new Error("server returned " + res.status);
+      ids = (await res.json()).collections.map(c => c.id);
+    } catch (err) {
+      const saved = Object.keys(FALLBACK);
+      if (saved.length) {
+        statusBox().textContent = "Live server offline, loading saved copies…";
+        return loadAll(saved, fetchFile);
+      }
+      statusBox().innerHTML = '<span class="err">The map data server is offline (' + esc(err.message) +
+        "). Try again later.</span>";
+      return;
+    }
+    if (ONLY.length) ids = ids.filter(id => ONLY.includes(id));
+    if (!ids.length) { statusBox().textContent = "The server is up but publishes no layers."; return; }
+    loadAll(ids, fetchAll);
+  }
+  start();
+</script>
+</body>
+</html>
