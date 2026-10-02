@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ann Arbor street lights</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .panel { background: #fff; padding: 8px 10px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 13px; line-height: 1.5; max-width: 260px; }
+    .panel .err { color: #b00020; }
+    .panel summary { cursor: pointer; font-weight: 600; }
+    .popup-table td { padding: 1px 6px 1px 0; vertical-align: top; }
+    .popup-table td:first-child { color: #666; }
+    .swatch { display: inline-block; flex: none; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px; border: 1px solid #0003; }
+    .dot { display: inline-block; flex: none; width: 7px; height: 7px; margin: 0 7px 0 3px; border-radius: 50%; background: #000; vertical-align: 1px; }
+
+    /* Key */
+    .legend { min-width: 190px; max-height: 60vh; overflow-y: auto; }
+    .legend .group { margin-top: 6px; }
+    .legend .group-title { font-weight: 600; margin-bottom: 2px; }
+    .legend .row { display: flex; align-items: center; }
+    .legend .count { margin-left: auto; padding-left: 12px; color: #888; font-variant-numeric: tabular-nums; }
+
+    /* Photo */
+    .photo-card { width: min(300px, 45vw); max-width: none; }
+    .photo-card img { display: block; width: 100%; max-width: 400px; height: auto; margin-top: 6px; border-radius: 3px; }
+    .photo-card .missing { margin-top: 6px; color: #666; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+  // ---------- Settings you may want to change ----------
+  // Must be HTTPS and reachable from the public internet for GitHub Pages visitors.
+  const SERVER = "https://henrylegion.tail9fa308.ts.net";
+
+  // Leave empty to load every layer the server publishes,
+  // or list ids to load only these, e.g. ["public.aa_landuse", "public.streetlights"]
+  const ONLY = [];
+
+  // Any layer whose id matches this is treated as the street lights layer
+  // (drawn on top, as small black dots).
+  const MAIN_LAYER = /light/i;
+
+  // The land use layer and the attribute that holds its type
+  const LANDUSE_ID = "public.aa_landuse";
+  const LANDUSE_FIELD = "GROUP_";
+
+  // Optional friendly names for the layer switcher and key
+  const LABELS = { "public.aa_landuse": "Land use" };
+
+  // Optional: copies of layers saved as GeoJSON files in this repo, used if the
+  // server can't be reached. e.g. { "public.aa_landuse": "data/aa_landuse.geojson" }
+  const FALLBACK = {};
+
+  // Land use colors (key = value in the data) and nicer names for the key
+  const LANDUSE_COLORS = {
+    "Residential": "#f2c94c", "Commercial": "#eb5757", "Office": "#bb6bd9",
+    "Industrial": "#8d6e63", "Recreation": "#27ae60", "Vacant": "#bdbdbd",
+    "Transportation": "#828282", "Water": "#2d9cdb",
+    "Public/Quasi-Public/Institutional/Organi": "#56ccf2"
+  };
+  const LANDUSE_NAMES = { "Public/Quasi-Public/Institutional/Organi": "Public / institutional" };
+  const LANDUSE_OTHER = "#f2994a";
+
+  const PALETTE = ["#1f78b4", "#e31a1c", "#33a02c", "#ff7f00", "#6a3d9a", "#b15928", "#a6cee3", "#fb9a99"];
+  // ------------------------------------------------------
+
+  const isLights = id => MAIN_LAYER.test(id);
+  const isLanduse = id => id === LANDUSE_ID;
+  const nameOf = id => LABELS[id] || (isLights(id) ? "Street lights" : id.replace(/^public\./, ""));
+  // Draw order: land use at the bottom, other layers in the middle, street lights on top
+  const rank = id => isLights(id) ? 0 : isLanduse(id) ? 2 : 1;
+  const wide = window.innerWidth > 700;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // Canvas rendering keeps thousands of points fast
+  const map = L.map("map", { preferCanvas: true }).setView([42.28, -83.74], 12);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 16, attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  const switcher = L.control.layers(null, {}, { collapsed: !wide }).addTo(map);
+
+  // ---------- Photo ----------
+  const photo = L.control({ position: "topleft" });
+  photo.onAdd = () => {
+    const d = L.DomUtil.create("div", "panel photo-card");
+    d.innerHTML =
+      "<details" + (wide ? " open" : "") + "><summary>Photo</summary>" +
+      '<a href="images/i2Gimage.png" target="_blank" rel="noopener" title="Open full size">' +
+      '<img src="images/i2Gimage.png" alt="Description of the photo" width="400"></a></details>';
+    d.querySelector("img").addEventListener("error", e => {
+      e.target.closest("a").outerHTML =
+        '<div class="missing">Image not found. Upload <b>i2Gimage.png</b> to the <b>images</b> folder of the repo.</div>';
+    });
+    L.DomEvent.disableClickPropagation(d);
+    L.DomEvent.disableScrollPropagation(d);
+    return d;
+  };
+  photo.addTo(map);
+
+  // ---------- Status panel: one line per layer ----------
+  const status = L.control({ position: "bottomleft" });
+  status.onAdd = () => { const d = L.DomUtil.create("div", "panel"); d.textContent = "Finding layers…"; return d; };
+  status.addTo(map);
+  const statusBox = () => status.getContainer();
+  const lines = {};
+  function setLine(id, html) { lines[id] = html; statusBox().innerHTML = Object.values(lines).join("<br>"); }
+
+  // ---------- Key ----------
+  const legendParts = {};
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const d = L.DomUtil.create("div", "panel legend");
+    d.innerHTML = "<details" + (wide ? " open" : "") + '><summary>Key</summary><div class="body"></div></details>';
+    d.style.display = "none";
+    L.DomEvent.disableClickPropagation(d);
+    L.DomEvent.disableScrollPropagation(d);
+    return d;
+  };
+  legend.addTo(map);
+  function renderLegend() {
+    const ids = Object.keys(legendParts).sort((a, b) => rank(a) - rank(b));
+    legend.getContainer().style.display = ids.length ? "" : "none";
+    legend.getContainer().querySelector(".body").innerHTML = ids.map(id => legendParts[id]).join("");
+  }
+  const row = (symbol, label, count) =>
+    '<div class="row">' + symbol + "<span>" + esc(label) + "</span>" +
+    (count != null ? '<span class="count">' + count.toLocaleString() + "</span>" : "") + "</div>";
+  const swatch = color => '<span class="swatch" style="background:' + color + '"></span>';
+
+  function landuseLegend(features) {
+    const counts = {};
+    for (const f of features) {
+      const g = f.properties[LANDUSE_FIELD] ?? "Unknown";
+      counts[g] = (counts[g] || 0) + 1;
+    }
+    let html = '<div class="group"><div class="group-title">' + esc(nameOf(LANDUSE_ID)) + "</div>";
+    for (const g of Object.keys(LANDUSE_COLORS)) {
+      if (counts[g]) html += row(swatch(LANDUSE_COLORS[g]), LANDUSE_NAMES[g] || g, counts[g]);
+    }
+    const others = Object.keys(counts).filter(g => !(g in LANDUSE_COLORS));
+    if (others.length) {
+      const n = others.reduce((s, g) => s + counts[g], 0);
+      html += row(swatch(LANDUSE_OTHER), "Other", n);
+    }
+    return html + "</div>";
+  }
+
+  // ---------- Styles ----------
+  // Street light dots grow a little as you zoom in
+  const lightRadius = z => z <= 12 ? 1.5 : z === 13 ? 2 : z === 14 ? 2.5 : 3.5;
+  const lightStyle = () => ({ radius: lightRadius(map.getZoom()), color: "#000", weight: 0.5,
+                              fillColor: "#000", fillOpacity: 1 });
+  const landuseStyle = f => ({ color: "#333", weight: 0.5, fillOpacity: 0.7,
+                               fillColor: LANDUSE_COLORS[f.properties[LANDUSE_FIELD]] || LANDUSE_OTHER });
+
+  function popupFor(props) {
+    const rows = Object.entries(props)
+      .map(([k, v]) => "<tr><td>" + esc(k) + "</td><td><b>" + esc(v ?? "—") + "</b></td></tr>").join("");
+    return '<table class="popup-table">' + rows + "</table>";
+  }
+
+  // ---------- Loading ----------
+  // Fetch every page of a collection (follows rel="next" links if the server pages)
+  async function fetchAll(id) {
+    let url = SERVER + "/collections/" + id + "/items.json?limit=10000";
+    const features = [];
+    while (url) {
+      const res = await fetch(url, { headers: { Accept: "application/geo+json" } });
+      if (!res.ok) throw new Error("server returned " + res.status);
+      const data = await res.json();
+      features.push(...data.features);
+      const next = (data.links || []).find(l => l.rel === "next");
+      url = next && data.features.length ? next.href : null;
+    }
+    return features;
+  }
+
+  async function fetchFile(id) {
+    const res = await fetch(FALLBACK[id]);
+    if (!res.ok) throw new Error(FALLBACK[id] + " not found");
+    return (await res.json()).features;
+  }
+
+  const loaded = {};
+  function reorder() {
+    Object.keys(loaded).sort((a, b) => rank(b) - rank(a))
+      .forEach(id => { if (map.hasLayer(loaded[id])) loaded[id].bringToFront(); });
+  }
+  map.on("overlayadd", reorder);
+  map.on("zoomend", () => {
+    const r = lightRadius(map.getZoom());
+    for (const id in loaded) if (isLights(id)) loaded[id].eachLayer(l => l.setRadius && l.setRadius(r));
+  });
+
+  async function loadLayer(id, color, getFeatures) {
+    const name = nameOf(id);
+    setLine(id, "Loading " + esc(name) + "…");
+    try {
+      const features = await getFeatures(id);
+      const lights = isLights(id);
+      const style = lights ? lightStyle : isLanduse(id) ? landuseStyle
+                  : () => ({ color, weight: 2, fillColor: color, fillOpacity: 0.35 });
+
+      const layer = L.geoJSON({ type: "FeatureCollection", features }, {
+        style,
+        pointToLayer: (f, latlng) => L.circleMarker(latlng,
+          lights ? lightStyle() : { radius: 5, ...style(f), fillOpacity: 0.85 }),
+        onEachFeature: (f, lyr) => lyr.bindPopup(popupFor(f.properties))
+      }).addTo(map);
+      loaded[id] = layer;
+      reorder();
+
+      const symbol = lights ? '<span class="dot"></span>' : swatch(isLanduse(id) ? LANDUSE_COLORS.Residential : color);
+      switcher.addOverlay(layer, symbol + esc(name));
+      legendParts[id] = isLanduse(id) ? landuseLegend(features)
+                      : '<div class="group">' + row(symbol, name, features.length) + "</div>";
+      renderLegend();
+      setLine(id, symbol + esc(name) + ": " + features.length.toLocaleString() + " features");
+      return layer;
+    } catch (err) {
+      setLine(id, '<span class="err">' + esc(name) + ": " + esc(err.message) + "</span>");
+      return null;
+    }
+  }
+
+  async function loadAll(ids, getFeatures) {
+    const layers = await Promise.all(ids.map((id, i) => loadLayer(id, PALETTE[i % PALETTE.length], getFeatures)));
+    const found = layers.filter(Boolean);
+    if (found.length) map.fitBounds(L.featureGroup(found).getBounds(), { padding: [20, 20] });
+  }
+
+  async function start() {
+    let ids;
+    try {
+      // Ask the server which layers exist
+      const res = await fetch(SERVER + "/collections.json");
+      if (!res.ok) throw new Error("server returned " + res.status);
+      ids = (await res.json()).collections.map(c => c.id);
+    } catch (err) {
+      const saved = Object.keys(FALLBACK);
+      if (saved.length) {
+        statusBox().textContent = "Live server offline, loading saved copies…";
+        return loadAll(saved, fetchFile);
+      }
+      statusBox().innerHTML = '<span class="err">The map data server is offline (' + esc(err.message) +
+        "). Try again later.</span>";
+      return;
+    }
+    if (ONLY.length) ids = ids.filter(id => ONLY.includes(id));
+    if (!ids.length) { statusBox().textContent = "The server is up but publishes no layers."; return; }
+    loadAll(ids, fetchAll);
+  }
+  start();
+</script>
+</body>
+</html>
