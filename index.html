@@ -91,11 +91,11 @@
     const d = L.DomUtil.create("div", "panel photo-card");
     d.innerHTML =
       "<details" + (wide ? " open" : "") + "><summary>Photo</summary>" +
-      '<a href="images/i2Gimage.png" target="_blank" rel="noopener" title="Open full size">' +
-      '<img src="images/i2Gimage.png" alt="Description of the photo" width="400"></a></details>';
+      '<a href="images/i2Gimage" target="_blank" rel="noopener" title="Open full size">' +
+      '<img src="images/i2Gimage" alt="Description of the photo" width="400"></a></details>';
     d.querySelector("img").addEventListener("error", e => {
       e.target.closest("a").outerHTML =
-        '<div class="missing">Image not found. Upload <b>i2Gimage.png</b> to the <b>images</b> folder of the repo.</div>';
+        '<div class="missing">Image not found. Upload <b>i2Gimage</b> to the <b>images</b> folder of the repo.</div>';
     });
     L.DomEvent.disableClickPropagation(d);
     L.DomEvent.disableScrollPropagation(d);
